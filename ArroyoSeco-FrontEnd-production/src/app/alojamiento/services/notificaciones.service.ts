@@ -106,6 +106,19 @@ export class NotificacionesService {
     );
   }
 
+  marcarNoLeida(id: number | string): Observable<any> {
+    // Estrategia tolerante: probar PUT minúsculas → PATCH → PUT mayúscula → POST
+    return this.api.put(`/notificaciones/${id}/noLeer`, {}).pipe(
+      catchError(err1 => this.api.patch(`/notificaciones/${id}/noLeer`, {}).pipe(
+        catchError(err2 => this.api.put(`/Notificaciones/${id}/noLeer`, {}).pipe(
+          catchError(err3 => this.api.post(`/notificaciones/${id}/noLeer`, {}).pipe(
+            catchError(() => throwError(() => err1))
+          ))
+        ))
+      ))
+    );
+  }
+
   eliminar(id: number | string): Observable<any> {
     return this.api.delete(`/notificaciones/${id}`);
   }

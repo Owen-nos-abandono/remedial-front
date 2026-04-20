@@ -48,11 +48,14 @@ interface Notificacion {
             <p>{{ n.mensaje }}</p>
             <div class="meta" *ngIf="n.alojamientoNombre || n.reservaFolio">
               <span *ngIf="n.alojamientoNombre" class="chip aloj">🏠 {{ n.alojamientoNombre }}</span>
+              <span *ngIf="n.reservaFolio" class="chip folio">📋 {{ n.reservaFolio }}</span>
             </div>
           </div>
           <div class="item__side">
             <span class="fecha">{{ formatFecha(n.fecha) }}</span>
-            <button class="btn" (click)="toggleLeida(n)">{{ n.leida ? 'Marcar como no leída' : 'Marcar como leída' }}</button>
+            <button class="btn" (click)="toggleLeida(n)">
+              {{ n.leida ? 'Marcar como no leída' : 'Marcar como leída' }}
+            </button>
           </div>
         </article>
       </div>
@@ -147,18 +150,18 @@ export class OferenteNotificacionesComponent implements OnInit {
     this.load();
   }
 
-  applyFilters() {
+  applyFilters(): void {
     this.page = 1;
     this.load();
   }
 
-  goToPage(next: number) {
+  goToPage(next: number): void {
     if (next < 1 || next > this.totalPages) return;
     this.page = next;
     this.load();
   }
 
-  load() {
+  load(): void {
     this.loading = true;
     this.error = null;
     this.notiService.listPaged({
@@ -169,20 +172,26 @@ export class OferenteNotificacionesComponent implements OnInit {
       to: this.toDate || undefined
     }).pipe(first()).subscribe({
       next: (res) => {
-        this.total = res?.total || 0;
-        this.totalPages = res?.totalPages || 1;
-        this.notificaciones = (res?.items || []).map((d: NotificacionDto) => {
-          const rawId = (d as any)?.id ?? (d as any)?.ID ?? (d as any)?.notificacionId ?? (d as any)?.NotificacionId;
-          return {
-            id: String(rawId ?? ''),
-            titulo: d.titulo || 'Notificación',
-            mensaje: d.mensaje,
-            fecha: d.fecha || new Date().toLocaleDateString(),
-            leida: !!d.leida,
-            reservaFolio: d.reservaFolio,
-            alojamientoNombre: d.alojamientoNombre
-          };
-        }).filter(n => n.id !== '');
+        this.total = res?.total ?? 0;
+        this.totalPages = res?.totalPages ?? 1;
+        this.notificaciones = (res?.items ?? [])
+          .map((d: NotificacionDto) => {
+            const rawId =
+              (d as any)?.id ??
+              (d as any)?.ID ??
+              (d as any)?.notificacionId ??
+              (d as any)?.NotificacionId;
+            return {
+              id: String(rawId ?? ''),
+              titulo: d.titulo || 'Notificación',
+              mensaje: d.mensaje,
+              fecha: d.fecha || new Date().toISOString(),
+              leida: !!d.leida,
+              reservaFolio: d.reservaFolio,
+              alojamientoNombre: d.alojamientoNombre
+            };
+          })
+          .filter((n: Notificacion) => n.id !== '');
         this.loading = false;
       },
       error: () => {
@@ -193,7 +202,12 @@ export class OferenteNotificacionesComponent implements OnInit {
   }
 
   formatFecha(value: string): string {
-    const d = new Date(value);
+    // Añadir 'T00:00:00' si el string es solo fecha (YYYY-MM-DD) para evitar
+    // desfase de zona horaria al interpretar como UTC
+    const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ? `${value}T00:00:00`
+      : value;
+    const d = new Date(normalized);
     if (Number.isNaN(d.getTime())) return value;
     return new Intl.DateTimeFormat('es-MX', {
       day: '2-digit',
@@ -204,12 +218,23 @@ export class OferenteNotificacionesComponent implements OnInit {
     }).format(d);
   }
 
-  toggleLeida(n: Notificacion) {
-    this.notiService.marcarLeida(n.id).pipe(first()).subscribe({
+  toggleLeida(n: Notificacion): void {
+    // FIX: llamar el método correcto según el estado actual
+    const accion$ = n.leida
+      ? this.notiService.marcarNoLeida(n.id)
+      : this.notiService.marcarLeida(n.id);
+
+    accion$.pipe(first()).subscribe({
       next: () => {
         n.leida = !n.leida;
+        // Si el filtro "solo no leídas" está activo, recargar para reflejar el cambio
+        if (this.soloNoLeidas) {
+          this.load();
+        }
       },
-      error: () => this.error = 'Error al actualizar notificación'
+      error: () => {
+        this.error = 'Error al actualizar notificación';
+      }
     });
   }
 }
