@@ -1,0 +1,244 @@
+<section class="reservas">
+  <div class="hero">
+    <div>
+      <h2>Mis Reservas</h2>
+      <p>Consulta el estado de tus solicitudes, estancias activas y experiencias finalizadas.</p>
+    </div>
+    <a class="hero-link" routerLink="/cliente/alojamientos">Explorar alojamientos</a>
+  </div>
+
+  <div class="filters-card">
+    <div class="filter-pills" role="tablist" aria-label="Filtros de reservas">
+      <button type="button" class="pill" [class.pill--active]="filtroActual === 'resumen'" (click)="setFiltro('resumen')">Resumen</button>
+      <button type="button" class="pill" [class.pill--active]="filtroActual === 'pendientes'" (click)="setFiltro('pendientes')">Pendientes</button>
+      <button type="button" class="pill" [class.pill--active]="filtroActual === 'activas'" (click)="setFiltro('activas')">Activas</button>
+      <button type="button" class="pill" [class.pill--active]="filtroActual === 'caducadas'" (click)="setFiltro('caducadas')">Solicitudes caducadas</button>
+      <button type="button" class="pill" [class.pill--active]="filtroActual === 'completadas'" (click)="setFiltro('completadas')">Completadas</button>
+      <button type="button" class="pill" [class.pill--active]="filtroActual === 'canceladas'" (click)="setFiltro('canceladas')">Canceladas</button>
+    </div>
+
+    <div class="filter-controls">
+      <label class="search-field">
+        <span>Buscar</span>
+        <input type="text" [(ngModel)]="busqueda" placeholder="Alojamiento, folio o estado" />
+      </label>
+
+      <label class="sort-field">
+        <span>Ordenar por</span>
+        <select [(ngModel)]="ordenActual">
+          <option value="proxima-entrada">Próxima entrada</option>
+          <option value="mas-reciente">Más reciente</option>
+          <option value="precio-mayor">Precio mayor</option>
+        </select>
+      </label>
+    </div>
+  </div>
+
+  <div class="section" *ngIf="mostrarPendientes">
+    <h3>Pendientes de confirmar</h3>
+    <div class="grid" *ngIf="reservasPendientes.length > 0; else noPendientes">
+      <div class="card" *ngFor="let r of reservasPendientes">
+        <div class="card-header">
+          <h4>{{ r.alojamiento }}</h4>
+          <span class="badge pendiente">Pendiente de confirmar</span>
+        </div>
+        <div class="card-body">
+          <div class="info-row">
+            <span class="label">Entrada:</span>
+            <span>{{ r.fechaEntrada | date:'dd/MM/yyyy' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Salida:</span>
+            <span>{{ r.fechaSalida | date:'dd/MM/yyyy' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Huéspedes:</span>
+            <span>{{ r.huespedes }}</span>
+          </div>
+          <div class="info-row total">
+            <span class="label">Total:</span>
+            <span>${{ r.total }}</span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <span class="status-note">Solicitud no vista por el oferente todavía.</span>
+        </div>
+      </div>
+    </div>
+    <ng-template #noPendientes>
+      <p class="empty">No tienes solicitudes pendientes por confirmar.</p>
+    </ng-template>
+  </div>
+
+  <div class="section" *ngIf="mostrarActivas">
+    <h3>Reservas Activas</h3>
+    <div class="grid" *ngIf="reservasActivas.length > 0; else noActivas">
+      <div class="card" *ngFor="let r of reservasActivas">
+        <div class="card-header">
+          <h4>{{ r.alojamiento }}</h4>
+          <span class="badge activa">Reserva activa</span>
+        </div>
+        <div class="card-body">
+          <div class="info-row">
+            <span class="label">Entrada:</span>
+            <span>{{ r.fechaEntrada | date:'dd/MM/yyyy' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Salida:</span>
+            <span>{{ r.fechaSalida | date:'dd/MM/yyyy' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Huéspedes:</span>
+            <span>{{ r.huespedes }}</span>
+          </div>
+          <div class="info-row total">
+            <span class="label">Total:</span>
+            <span>${{ r.total }}</span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <button class="btn-cancel" (click)="openCancelModal(r)">Cancelar reserva</button>
+        </div>
+      </div>
+    </div>
+    <ng-template #noActivas>
+      <p class="empty">No tienes reservas activas.</p>
+    </ng-template>
+  </div>
+
+  <div class="section" *ngIf="mostrarCaducadas">
+    <h3>Solicitudes caducadas</h3>
+    <div class="grid" *ngIf="solicitudesCaducadas.length > 0; else noCaducadas">
+      <div class="card card--expired" *ngFor="let r of solicitudesCaducadas">
+        <div class="card-header">
+          <h4>{{ r.alojamiento }}</h4>
+          <span class="badge caducada">Caducada</span>
+        </div>
+        <div class="card-body">
+          <div class="info-row">
+            <span class="label">Entrada:</span>
+            <span>{{ r.fechaEntrada | date:'dd/MM/yyyy' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Salida:</span>
+            <span>{{ r.fechaSalida | date:'dd/MM/yyyy' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Huéspedes:</span>
+            <span>{{ r.huespedes }}</span>
+          </div>
+          <div class="info-row total">
+            <span class="label">Total:</span>
+            <span>${{ r.total }}</span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <span class="status-note status-note--muted">Solicitud no vista: la fecha solicitada ya pasó sin respuesta del oferente.</span>
+        </div>
+      </div>
+    </div>
+    <ng-template #noCaducadas>
+      <p class="empty">No tienes solicitudes caducadas.</p>
+    </ng-template>
+  </div>
+
+  <div class="section" *ngIf="mostrarHistorial">
+    <h3>Historial de estancias</h3>
+    <div class="grid" *ngIf="historialVisible.length > 0; else noPasadas">
+      <div class="card" *ngFor="let r of historialVisible">
+        <div class="card-header">
+          <h4>{{ r.alojamiento }}</h4>
+          <span class="badge"
+            [class.pasada]="r.estado === 'completada'"
+            [class.cancelada]="r.estado === 'cancelada'">
+            {{ r.estado === 'completada' ? 'Completada' : 'Cancelada' }}
+          </span>
+        </div>
+        <div class="card-body">
+          <div class="info-row">
+            <span class="label">Entrada:</span>
+            <span>{{ r.fechaEntrada | date:'dd/MM/yyyy' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Salida:</span>
+            <span>{{ r.fechaSalida | date:'dd/MM/yyyy' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Huéspedes:</span>
+            <span>{{ r.huespedes }}</span>
+          </div>
+          <div class="info-row total">
+            <span class="label">Total:</span>
+            <span>${{ r.total }}</span>
+          </div>
+        </div>
+        <div class="card-actions" *ngIf="r.estado === 'completada'">
+          <button class="btn-resena" (click)="abrirResena(r.id)"
+            *ngIf="!resenasExistentes.has(r.id)">
+            ★ Valorar alojamiento
+          </button>
+          <span class="badge-resena" *ngIf="resenasExistentes.has(r.id)">
+            ✓ Ya reseñado
+          </span>
+        </div>
+      </div>
+    </div>
+    <ng-template #noPasadas>
+      <p class="empty">No tienes reservas en el historial.</p>
+    </ng-template>
+  </div>
+</section>
+
+<!-- Modal de cancelación -->
+<div class="modal-overlay" *ngIf="showCancelModal" (click)="closeCancelModal()">
+  <div class="modal" (click)="$event.stopPropagation()">
+    <h3>¿Cancelar reserva?</h3>
+    <p>¿Estás seguro de que deseas cancelar la reserva de <strong>{{ selectedReserva?.alojamiento }}</strong>?</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" (click)="closeCancelModal()">No, mantener</button>
+      <button class="btn-danger" (click)="cancelReserva()">Sí, cancelar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de reseña -->
+<div class="modal-overlay" *ngIf="showResenaModal" (click)="cerrarResena()">
+  <div class="modal modal--resena" (click)="$event.stopPropagation()">
+    <h3>Valorar alojamiento</h3>
+    <p class="modal-subtitle">Comparte tu experiencia con estrellas y comentario para ayudar a otros viajeros.</p>
+
+    <div class="rating-selector">
+      <label>Calificación:</label>
+      <div class="stars">
+        <button
+          *ngFor="let s of [1,2,3,4,5]"
+          type="button"
+          class="star-btn"
+          [class.star-btn--active]="s <= resenaModel.calificacion"
+          (click)="setCalificacion(s)">★</button>
+      </div>
+      <span class="rating-label">{{ resenaModel.calificacion }} / 5</span>
+    </div>
+
+    <div class="field">
+      <label>Comentario <small>(mínimo 10 caracteres)</small></label>
+      <textarea
+        [(ngModel)]="resenaModel.comentario"
+        rows="4"
+        maxlength="2000"
+        placeholder="Contá tu experiencia: el lugar, la atención, qué te gustó...">
+      </textarea>
+      <small class="char-count">{{ resenaModel.comentario.length }} / 2000</small>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-secondary" (click)="cerrarResena()" [disabled]="submittingResena">Cancelar</button>
+      <button
+        class="btn-primary"
+        (click)="enviarResena()"
+        [disabled]="submittingResena || resenaModel.comentario.length < 10">
+        {{ submittingResena ? 'Enviando...' : 'Enviar reseña' }}
+      </button>
+    </div>
+  </div>
+</div>
