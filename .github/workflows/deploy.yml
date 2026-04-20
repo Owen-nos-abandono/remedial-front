@@ -1,4 +1,4 @@
-name: Deploy Angular Frontend
+name: Deploy Angular UTEQ
 
 on:
   push:
@@ -11,20 +11,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 1. Login en Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 2. Construir la imagen (El punto al final es vital)
+      # Este paso construye la imagen usando el directorio actual como contexto
       - name: Build and push Docker image
         run: |
           docker build -t ${{ secrets.DOCKER_USER }}/remedial-front:latest .
           docker push ${{ secrets.DOCKER_USER }}/remedial-front:latest
 
-      # 3. Despliegue en tu VM de Google Cloud vía SSH
       - name: Deploy to Server via SSH
         uses: appleboy/ssh-action@master
         with:
@@ -33,11 +31,8 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           script: |
-            # Limpiar el contenedor anterior
             docker stop app-frontend || true
             docker rm app-frontend || true
             docker image prune -f
-            
-            # Bajar la imagen nueva y correrla en el puerto 3001
             docker pull ${{ secrets.DOCKER_USER }}/remedial-front:latest
             docker run -d --name app-frontend -p 3001:80 ${{ secrets.DOCKER_USER }}/remedial-front:latest
