@@ -2,7 +2,7 @@ name: Deploy Angular Frontend
 
 on:
   push:
-    branches: [ main ]  # Se dispara cada vez que subes algo a la rama main
+    branches: [ main ]
 
 jobs:
   build-and-deploy:
@@ -11,37 +11,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 1. Iniciar sesión en Docker Hub usando tus Secrets
+      # 1. Login en Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 2. Construir la imagen y subirla a Docker Hub
+      # 2. Construir la imagen (El punto al final es vital)
       - name: Build and push Docker image
         run: |
           docker build -t ${{ secrets.DOCKER_USER }}/remedial-front:latest .
           docker push ${{ secrets.DOCKER_USER }}/remedial-front:latest
 
-      # 3. Entrar al servidor de Google Cloud y actualizar el contenedor
+      # 3. Despliegue en tu VM de Google Cloud vía SSH
       - name: Deploy to Server via SSH
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SSH_HOST }}
           username: riveradiazjanine
-          key: ${{ secrets.SSH_PRIVATE_KEY }} # Aquí usa la llave que pegamos, NO password
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           script: |
-            # Detener y eliminar el contenedor viejo si existe
+            # Limpiar el contenedor anterior
             docker stop app-frontend || true
             docker rm app-frontend || true
-            
-            # Limpiar imágenes viejas para no llenar el disco de la VM
             docker image prune -f
             
-            # Descargar la versión más nueva de tu imagen
+            # Bajar la imagen nueva y correrla en el puerto 3001
             docker pull ${{ secrets.DOCKER_USER }}/remedial-front:latest
-            
-            # Correr el nuevo contenedor en el puerto 3001
             docker run -d --name app-frontend -p 3001:80 ${{ secrets.DOCKER_USER }}/remedial-front:latest
