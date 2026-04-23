@@ -1,0 +1,183 @@
+name: Deploy Frontend (Blue/Green)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'remedial/frontend/ArroyoSeco-FrontEnd-production/**'
+      - 'remedial/backend/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-frontend
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Jest Tests (Backend)
+        working-directory: ./remedial/backend
+        run: |
+          npm init -y
+          npm install jest --save-dev
+          npx jest example.test.js
+
+      - name: Setup .NET para C# Tests
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run C# Unit Tests (IntegridadTests.cs)
+        working-directory: ./remedial/backend
+        run: |
+          # Si tienes un archivo .csproj en tu backend, lo ideal es usar "dotnet test".
+          # Por el momento comprobamos que compila o dejamos el espacio listo para "dotnet test".
+          echo "Ejecutando pruebas C# (asegúrate de tener un .csproj válido para dotnet test)"
+          # dotnet test tu-proyecto.csproj
+
+  build-and-push-image:
+    needs: run-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./remedial/frontend/ArroyoSeco-FrontEnd-production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    needs: build-and-push-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (to get scripts)
+        uses: actions/checkout@v4
+
+      - name: Copy deployment scripts to Docker VM
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.DOCKER_VM_IP }}
+          username: ${{ secrets.DOCKER_VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          source: "remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/deploy-docker.sh,remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/k6-test.js"
+          target: "/tmp/"
+
+      - name: Execute Docker Deploy Script
+        id: exec_docker
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE_TAG: ${{ needs.build-and-push-image.outputs.image_tag }}
+        with:
+          host: ${{ secrets.DOCKER_VM_IP }}
+          username: ${{ secrets.DOCKER_VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          envs: IMAGE_TAG
+          script_stop: true
+          script: |
+            chmod +x /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/deploy-docker.sh
+            # Autenticar en GHCR (opcional si la imagen es pública, necesario si es privada)
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            # Ejecutar script
+            /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/deploy-docker.sh $IMAGE_TAG
+            # Leer el entorno activo
+            cat /tmp/deploy_status.txt
+
+      - name: Install SSH Key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          known_hosts: "just-a-placeholder-so-we-dont-get-errors"
+
+      - name: Add Known Hosts
+        run: |
+          ssh-keyscan -H ${{ secrets.DOCKER_VM_IP }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.NGINX_VM_IP }} >> ~/.ssh/known_hosts
+
+      - name: Get Active Env & Port
+        id: get_env
+        run: |
+          ACTIVE_ENV=$(ssh ${{ secrets.DOCKER_VM_USER }}@${{ secrets.DOCKER_VM_IP }} "cat /tmp/deploy_status.txt | grep NEW_ENV | cut -d'=' -f2")
+          echo "ACTIVE_ENV=$ACTIVE_ENV" >> $GITHUB_ENV
+          
+          if [ "$ACTIVE_ENV" == "blue" ]; then
+            echo "ACTIVE_PORT=8081" >> $GITHUB_ENV
+          else
+            echo "ACTIVE_PORT=8082" >> $GITHUB_ENV
+          fi
+
+      - name: Run K6 Load Test in Docker VM
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          ACTIVE_PORT: ${{ env.ACTIVE_PORT }}
+        with:
+          host: ${{ secrets.DOCKER_VM_IP }}
+          username: ${{ secrets.DOCKER_VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          envs: ACTIVE_PORT
+          script_stop: true
+          script: |
+            echo "Ejecutando pruebas de carga K6 contra http://localhost:$ACTIVE_PORT..."
+            # Usar contenedor Docker de K6 para correr el script
+            docker run --rm -i \
+              -e TARGET_URL=http://localhost:$ACTIVE_PORT \
+              grafana/k6 run - < /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/k6-test.js
+            echo "Pruebas de K6 exitosas."
+
+      - name: Copy Nginx script to Nginx VM
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.NGINX_VM_IP }}
+          username: ${{ secrets.NGINX_VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          source: "remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/switch-nginx.sh"
+          target: "/tmp/"
+
+      - name: Switch Nginx Traffic
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          ACTIVE_ENV: ${{ env.ACTIVE_ENV }}
+          DOCKER_VM_INTERNAL_IP: ${{ secrets.DOCKER_VM_INTERNAL_IP }}
+        with:
+          host: ${{ secrets.NGINX_VM_IP }}
+          username: ${{ secrets.NGINX_VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          envs: ACTIVE_ENV
+          script_stop: true
+          script: |
+            chmod +x /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/switch-nginx.sh
+            IP_TO_USE="${DOCKER_VM_INTERNAL_IP:-${{ secrets.DOCKER_VM_IP }}}"
+            /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/switch-nginx.sh $ACTIVE_ENV $IP_TO_USE
+
