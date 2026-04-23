@@ -39,8 +39,6 @@ jobs:
       - name: Run C# Unit Tests (IntegridadTests.cs)
         working-directory: ./remedial/backend
         run: |
-          # Si tienes un archivo .csproj en tu backend, lo ideal es usar "dotnet test".
-          # Por el momento comprobamos que compila o dejamos el espacio listo para "dotnet test".
           echo "Ejecutando pruebas C# (asegúrate de tener un .csproj válido para dotnet test)"
           # dotnet test tu-proyecto.csproj
 
@@ -86,12 +84,18 @@ jobs:
       - name: Checkout repository (to get scripts)
         uses: actions/checkout@v4
 
+      - name: Debug Secrets Existence
+        run: |
+          if [ -z "${{ secrets.SERVER_HOST }}" ]; then echo "❌ SERVER_HOST está vacío"; else echo "✅ SERVER_HOST está configurado"; fi
+          if [ -z "${{ secrets.SERVER_USER }}" ]; then echo "❌ SERVER_USER está vacío"; else echo "✅ SERVER_USER está configurado"; fi
+          if [ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]; then echo "❌ SSH_PRIVATE_KEY está vacío"; else echo "✅ SSH_PRIVATE_KEY está configurado"; fi
+
       - name: Copy deployment scripts to Docker VM
         uses: appleboy/scp-action@master
         with:
-          host: ${{ secrets.DOCKER_VM_IP }}
-          username: ${{ secrets.DOCKER_VM_USER }}
-          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: "remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/deploy-docker.sh,remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/k6-test.js"
           target: "/tmp/"
 
@@ -101,14 +105,14 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.build-and-push-image.outputs.image_tag }}
         with:
-          host: ${{ secrets.DOCKER_VM_IP }}
-          username: ${{ secrets.DOCKER_VM_USER }}
-          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: IMAGE_TAG
           script_stop: true
           script: |
             chmod +x /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/deploy-docker.sh
-            # Autenticar en GHCR (opcional si la imagen es pública, necesario si es privada)
+            # Autenticar en GHCR
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             # Ejecutar script
             /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/deploy-docker.sh $IMAGE_TAG
@@ -118,18 +122,17 @@ jobs:
       - name: Install SSH Key
         uses: shimataro/ssh-key-action@v2
         with:
-          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           known_hosts: "just-a-placeholder-so-we-dont-get-errors"
 
       - name: Add Known Hosts
         run: |
-          ssh-keyscan -H ${{ secrets.DOCKER_VM_IP }} >> ~/.ssh/known_hosts
-          ssh-keyscan -H ${{ secrets.NGINX_VM_IP }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
 
       - name: Get Active Env & Port
         id: get_env
         run: |
-          ACTIVE_ENV=$(ssh ${{ secrets.DOCKER_VM_USER }}@${{ secrets.DOCKER_VM_IP }} "cat /tmp/deploy_status.txt | grep NEW_ENV | cut -d'=' -f2")
+          ACTIVE_ENV=$(ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "cat /tmp/deploy_status.txt | grep NEW_ENV | cut -d'=' -f2")
           echo "ACTIVE_ENV=$ACTIVE_ENV" >> $GITHUB_ENV
           
           if [ "$ACTIVE_ENV" == "blue" ]; then
@@ -143,14 +146,13 @@ jobs:
         env:
           ACTIVE_PORT: ${{ env.ACTIVE_PORT }}
         with:
-          host: ${{ secrets.DOCKER_VM_IP }}
-          username: ${{ secrets.DOCKER_VM_USER }}
-          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: ACTIVE_PORT
           script_stop: true
           script: |
             echo "Ejecutando pruebas de carga K6 contra http://localhost:$ACTIVE_PORT..."
-            # Usar contenedor Docker de K6 para correr el script
             docker run --rm -i \
               -e TARGET_URL=http://localhost:$ACTIVE_PORT \
               grafana/k6 run - < /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/k6-test.js
@@ -159,9 +161,9 @@ jobs:
       - name: Copy Nginx script to Nginx VM
         uses: appleboy/scp-action@master
         with:
-          host: ${{ secrets.NGINX_VM_IP }}
-          username: ${{ secrets.NGINX_VM_USER }}
-          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: "remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/switch-nginx.sh"
           target: "/tmp/"
 
@@ -169,15 +171,13 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           ACTIVE_ENV: ${{ env.ACTIVE_ENV }}
-          DOCKER_VM_INTERNAL_IP: ${{ secrets.DOCKER_VM_INTERNAL_IP }}
         with:
-          host: ${{ secrets.NGINX_VM_IP }}
-          username: ${{ secrets.NGINX_VM_USER }}
-          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: ACTIVE_ENV
           script_stop: true
           script: |
             chmod +x /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/switch-nginx.sh
-            IP_TO_USE="${DOCKER_VM_INTERNAL_IP:-${{ secrets.DOCKER_VM_IP }}}"
-            /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/switch-nginx.sh $ACTIVE_ENV $IP_TO_USE
-
+            # Si Nginx y Docker están en la misma máquina usamos localhost/127.0.0.1
+            /tmp/remedial/frontend/ArroyoSeco-FrontEnd-production/scripts/switch-nginx.sh $ACTIVE_ENV 127.0.0.1

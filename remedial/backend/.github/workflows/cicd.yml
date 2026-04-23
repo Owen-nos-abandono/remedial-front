@@ -1,0 +1,136 @@
+name: Blue-Green Pipeline Final
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # --- ETAPA 1: PRUEBAS UNITARIAS ---
+  unit-tests:
+    name: Run .NET Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore and Test
+        run: |
+          # Ruta corregida según tu estructura de carpetas
+          dotnet restore "ArroyoSeco-BackEnd-main/arroyoSeco/arroyoSeco.API.csproj"
+          dotnet test "ArroyoSeco-BackEnd-main/arroyoSeco/arroyoSeco.API.csproj" --no-restore --verbosity normal
+
+  # --- ETAPA 2: BUILD & PUSH ---
+  build-and-push:
+    name: Build and Push Images
+    needs: [unit-tests]
+    runs-on: ubuntu-latest
+    outputs:
+      repo_lc: ${{ steps.repo_prep.outputs.repo_lc }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Prepare Repo Name (Lowercase)
+        id: repo_prep
+        run: echo "repo_lc=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+      
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Backend
+        uses: docker/build-push-action@v5
+        with:
+          # Contexto "." permite que el Dockerfile entre a ArroyoSeco-BackEnd-main
+          context: .
+          file: ./backend/Dockerfile
+          push: true
+          tags: ghcr.io/${{ steps.repo_prep.outputs.repo_lc }}-back:latest
+
+      - name: Build Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend/ArroyoSeco-FrontEnd-production
+          file: ./frontend/ArroyoSeco-FrontEnd-production/Dockerfile
+          push: true
+          tags: ghcr.io/${{ steps.repo_prep.outputs.repo_lc }}-front:latest
+
+  # --- ETAPA 3: DESPLIEGUE SSH ---
+  deploy:
+    name: Blue-Green Deploy
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH Deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            REPO_LC="${{ needs.build-and-push.outputs.repo_lc }}"
+            
+            # Lógica Blue-Green
+            if [ -f ~/current_deploy.env ]; then source ~/current_deploy.env; else LAST_DEPLOY=blue; fi
+            if [ "$LAST_DEPLOY" == "blue" ]; then TARGET="green"; else TARGET="blue"; fi
+
+            # 1. Pull y Run Backend (Puerto 8080 interno)
+            docker pull ghcr.io/$REPO_LC-back:latest
+            docker rm -f app-back-$TARGET || true
+            docker run -d --name app-back-$TARGET --network="host" --restart always ghcr.io/$REPO_LC-back:latest
+
+            # 2. Pull y Run Frontend (Puerto 8085 externo)
+            docker pull ghcr.io/$REPO_LC-front:latest
+            docker rm -f app-frontend || true
+            docker run -d --name app-frontend -p 8085:80 --restart always ghcr.io/$REPO_LC-front:latest
+
+            sleep 10
+            
+            # 3. Nginx Config (Proxy a 8085 para front y 8080 para api)
+            printf "server {
+                listen 80;
+                location / {
+                    proxy_pass http://127.0.0.1:8085;
+                }
+                location /api {
+                    proxy_pass http://127.0.0.1:8080;
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                }
+            }\n" | sudo tee /etc/nginx/conf.d/default.conf
+            
+            sudo systemctl reload nginx
+            
+            # Guardar estado y limpieza
+            echo "LAST_DEPLOY=$TARGET" > ~/current_deploy.env
+            docker stop app-back-$LAST_DEPLOY || true
+            docker image prune -f
+
+  # --- ETAPA 4: PERFORMANCE TEST ---
+  performance-test:
+    name: K6 Validation
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run K6
+        run: |
+          docker run --rm -i grafana/k6 run - <<EOF
+          import http from 'k6/http';
+          import { check } from 'k6';
+          export default function () {
+            const res = http.get('http://${{ secrets.SERVER_HOST }}/');
+            check(res, { 'status is 200': (r) => r.status === 200 });
+          }
+          EOF
